@@ -11,13 +11,12 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: real-waste-training-${{ github.ref }}-${{ matrix.model }}
-  cancel-in-progress: false
-
 jobs:
   train:
     name: Train ${{ matrix.model }}
+    concurrency:
+      group: real-waste-training-${{ github.ref }}-${{ matrix.model }}
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     timeout-minutes: 350
     strategy:
