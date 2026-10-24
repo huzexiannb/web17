@@ -23,8 +23,8 @@ jobs:
       - name: Download four completed model artifacts
         uses: actions/download-artifact@v4
         with:
-          github-token: \${{ github.token }}
-          repository: \${{ github.repository }}
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
           run-id: 40124736619
           path: downloaded
       - name: Extract metrics, summarize mean and standard deviation, and validate files
