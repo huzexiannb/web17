@@ -6,6 +6,9 @@ on:
       - "aggregate_real_results.py"
       - ".github/workflows/aggregate-results.yml"
   workflow_dispatch:
+  workflow_run:
+    workflows: ["Real waste-classification training"]
+    types: [completed]
 
 permissions:
   actions: read
@@ -15,6 +18,7 @@ jobs:
   aggregate:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -22,12 +26,12 @@ jobs:
           python-version: "3.11"
       - name: Install report dependencies
         run: python -m pip install pandas numpy
-      - name: Download four completed model artifacts
+      - name: Download completed model artifacts
         uses: actions/download-artifact@v4
         with:
           github-token: ${{ github.token }}
           repository: ${{ github.repository }}
-          run-id: 40124736619
+          run-id: ${{ github.event.workflow_run.id || 40124736619 }}
           path: downloaded
       - name: Extract metrics, summarize mean and standard deviation, and validate files
         run: |
