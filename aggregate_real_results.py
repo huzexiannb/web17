@@ -167,3 +167,32 @@ if records and (len(confusion_summary) < expected_runs or len(history_summary) <
         f"training_histories={len(history_summary)}, "
         f"misclassified_lists={len(error_summary)}; expected at least {expected_runs} each."
     )
+
+
+# Quantify error patterns from the actual held-out test predictions.
+error_pattern_rows = []
+for name, df in error_summary:
+    if not {"true_label", "predicted_label"}.issubset(df.columns):
+        continue
+    normalized_name = name.replace("\\\\", "/")
+    model = next((m for m in ["resnet18", "mobilenet_v3_small", "efficientnet_v2_s", "efficientnet_v2_s_sk"] if f"/{m}/" in normalized_name), "unknown")
+    if df.empty:
+        continue
+    grouped = df.groupby(["true_label", "predicted_label"], dropna=False)
+    for (true_label, predicted_label), part in grouped:
+        error_pattern_rows.append({
+            "model": model,
+            "source_file": name,
+            "true_label": true_label,
+            "predicted_label": predicted_label,
+            "count": int(len(part)),
+            "mean_confidence": float(part["confidence"].mean()) if "confidence" in part.columns else None,
+        })
+if error_pattern_rows:
+    patterns = pd.DataFrame(error_pattern_rows)
+    patterns.to_csv(out / "error_pattern_summary.csv", index=False)
+    top_patterns = (patterns.groupby(["model", "true_label", "predicted_label"], as_index=False)
+                    .agg(error_count=("count", "sum"), mean_confidence=("mean_confidence", "mean"))
+                    .sort_values(["model", "error_count"], ascending=[True, False]))
+    top_patterns.to_csv(out / "top_misclassification_pairs.csv", index=False)
+    print("ERROR_PATTERN_ROWS=" + str(len(patterns)))
