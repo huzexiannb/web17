@@ -15,7 +15,7 @@ jobs:
   train:
     name: Train ${{ matrix.model }}
     concurrency:
-      group: real-waste-training-${{ github.ref }}-${{ matrix.model }}
+      group: real-waste-training-fast-${{ github.ref }}-${{ matrix.model }}
       cancel-in-progress: false
     runs-on: ubuntu-latest
     timeout-minutes: 350
@@ -62,10 +62,10 @@ jobs:
           python train_real.py \
             --model "${{ matrix.model }}" \
             --seeds 42 43 44 \
-            --epochs 8 \
-            --patience 3 \
-            --batch-size 16 \
-            --image-size 160 \
+            --epochs 4 \
+            --patience 2 \
+            --batch-size 32 \
+            --image-size 128 \
             --workers 2 \
             --cache-dir real_dataset_cache \
             --output-dir outputs
