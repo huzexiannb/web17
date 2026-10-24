@@ -62,8 +62,8 @@ jobs:
           python train_real.py \
             --model "${{ matrix.model }}" \
             --seeds 42 43 44 \
-            --epochs 4 \
-            --patience 2 \
+            --epochs 30 \
+            --patience 5 \
             --batch-size 32 \
             --image-size 128 \
             --workers 2 \
