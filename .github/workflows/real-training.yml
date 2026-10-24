@@ -1,0 +1,82 @@
+name: Real waste-classification training
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "train_real.py"
+      - "requirements-real-training.txt"
+      - ".github/workflows/real-training.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: real-waste-training-\${{ github.ref }}-\${{ matrix.model }}
+  cancel-in-progress: false
+
+jobs:
+  train:
+    name: Train \${{ matrix.model }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    strategy:
+      fail-fast: false
+      matrix:
+        model:
+          - resnet18
+          - mobilenet_v3_small
+          - efficientnet_v2_s
+          - efficientnet_v2_s_sk
+    env:
+      MPLBACKEND: Agg
+      HF_HUB_DISABLE_TELEMETRY: "1"
+      HF_HUB_ENABLE_HF_TRANSFER: "0"
+      OMP_NUM_THREADS: "2"
+      MKL_NUM_THREADS: "2"
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements-real-training.txt
+      - name: Install PyTorch CPU and dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+          pip install -r requirements-real-training.txt
+      - name: Show runtime
+        run: |
+          python - <<'PY'
+          import torch, torchvision, platform
+          print("Python:", platform.python_version())
+          print("PyTorch:", torch.__version__)
+          print("Torchvision:", torchvision.__version__)
+          print("CUDA available:", torch.cuda.is_available())
+          print("CPU threads:", torch.get_num_threads())
+          PY
+      - name: Train on real image dataset with three seeds
+        run: |
+          python train_real.py \
+            --model "\${{ matrix.model }}" \
+            --seeds 42 43 44 \
+            --epochs 8 \
+            --patience 3 \
+            --batch-size 16 \
+            --image-size 160 \
+            --workers 2 \
+            --cache-dir real_dataset_cache \
+            --output-dir outputs
+      - name: Upload model weights, metrics, curves, and error samples
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: real-training-\${{ matrix.model }}
+          path: |
+            outputs/
+            real_dataset_cache/
+          if-no-files-found: warn
+          retention-days: 30
