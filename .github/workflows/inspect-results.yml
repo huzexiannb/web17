@@ -1,0 +1,117 @@
+name: Verify real training artifacts
+
+on:
+  push:
+    paths:
+      - ".github/workflows/inspect-results.yml"
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Download completed training artifacts
+        uses: actions/download-artifact@v4
+        with:
+          github-token: \${{ secrets.GITHUB_TOKEN }}
+          repository: \${{ github.repository }}
+          run-id: 40124736619
+          path: artifacts
+      - name: Parse and verify metrics
+        run: |
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          import pandas as pd
+
+          root = Path("artifacts")
+          files = list(root.rglob("metrics.json"))
+          audit_files = list(root.rglob("dataset_audit.json"))
+          summary_rows = []
+          for path in files:
+              try:
+                  m = json.loads(path.read_text(encoding="utf-8"))
+              except Exception as e:
+                  print("METRICS_READ_ERROR", str(path), repr(e))
+                  continue
+              row = {
+                  "model": m.get("model"), "seed": m.get("seed"),
+                  "best_epoch": m.get("best_epoch"),
+                  "test_accuracy": m.get("accuracy"),
+                  "test_macro_precision": m.get("macro_precision"),
+                  "test_macro_recall": m.get("macro_recall"),
+                  "test_macro_f1": m.get("macro_f1"), "test_n": m.get("test_n"),
+                  "latency_mean_ms": (m.get("inference_latency") or {}).get("mean_ms"),
+                  "latency_std_ms": (m.get("inference_latency") or {}).get("std_ms"),
+                  "source_file": str(path),
+              }
+              summary_rows.append(row)
+              print("TEST_METRICS", json.dumps(row, ensure_ascii=False))
+          if not summary_rows:
+              raise SystemExit("No metrics.json files found in the downloaded artifacts.")
+          df = pd.DataFrame(summary_rows).sort_values(["model","seed"])
+          Path("verified_results").mkdir(exist_ok=True)
+          df.to_csv("verified_results/per_seed_test_metrics.csv", index=False)
+          metric_cols = ["test_accuracy","test_macro_precision","test_macro_recall","test_macro_f1","latency_mean_ms"]
+          grouped = df.groupby("model")[metric_cols].agg(["mean","std"])
+          grouped.columns = [f"{a}_{b}" for a,b in grouped.columns]
+          grouped.reset_index().to_csv("verified_results/model_mean_std.csv", index=False)
+
+          audit_summary = []
+          for path in audit_files:
+              a = json.loads(path.read_text(encoding="utf-8"))
+              audit_summary.append({
+                  "path": str(path), "source_dataset": a.get("source_dataset"),
+                  "source_rows": a.get("source_rows"),
+                  "final_unique_images": a.get("final_unique_images"),
+                  "split_counts": a.get("split_counts"),
+                  "class_counts_by_split": a.get("class_counts_by_split"),
+                  "source_to_model_label_mapping": a.get("source_to_model_label_mapping"),
+              })
+          Path("verified_results/dataset_audit_summary.json").write_text(
+              json.dumps(audit_summary, ensure_ascii=False, indent=2), encoding="utf-8")
+          missing = []
+          for artifact in root.iterdir():
+              if not artifact.is_dir(): continue
+              checks = {
+                  "best_model_weights": len(list(artifact.rglob("best_model.pt"))),
+                  "confusion_matrices": len(list(artifact.rglob("confusion_matrix.csv"))),
+                  "training_curves": len(list(artifact.rglob("training_curve.png"))),
+                  "test_prediction_files": len(list(artifact.rglob("test_predictions.csv"))),
+              }
+              print("ARTIFACT_CHECK", artifact.name, json.dumps(checks))
+              if any(v == 0 for v in checks.values()): missing.append(artifact.name)
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as f:
+              f.write("# Verified real training results\n\n")
+              f.write(f"- metrics.json files parsed: **{len(summary_rows)}**\n")
+              f.write(f"- dataset audit files: **{len(audit_files)}**\n\n")
+              f.write("## Per-seed held-out test metrics\n\n")
+              f.write(df[["model","seed","best_epoch","test_accuracy","test_macro_precision","test_macro_recall","test_macro_f1","test_n"]].to_markdown(index=False))
+              f.write("\n\n## Mean and standard deviation by model\n\n")
+              f.write(grouped.reset_index().to_markdown(index=False))
+              f.write("\n\n## Data audit\n\n")
+              f.write(json.dumps(audit_summary,ensure_ascii=False,indent=2))
+              f.write("\n\n## Artifact integrity\n\n")
+              f.write(f"- Missing required output types in artifact folders: {missing if missing else 'None detected'}\n")
+          print("SUMMARY_TABLE")
+          print(grouped.reset_index().to_string(index=False))
+          print("DATASET_AUDIT_SUMMARY", json.dumps(audit_summary, ensure_ascii=False))
+          PY
+      - name: Upload verified results
+        uses: actions/upload-artifact@v4
+        with:
+          name: verified-real-training-results
+          path: verified_results/
+          if-no-files-found: error
+          retention-days: 30
