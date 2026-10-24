@@ -1,0 +1,54 @@
+name: Aggregate completed real training results
+
+on:
+  push:
+    paths:
+      - "aggregate_real_results.py"
+      - ".github/workflows/aggregate-results.yml"
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  aggregate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Download four completed model artifacts
+        uses: actions/download-artifact@v4
+        with:
+          github-token: \${{ github.token }}
+          repository: \${{ github.repository }}
+          run-id: 40124736619
+          path: downloaded
+      - name: Extract metrics, summarize mean and standard deviation, and validate files
+        run: |
+          python - <<'PY'
+          import zipfile, pathlib
+          root=pathlib.Path("downloaded")
+          for z in root.rglob("*.zip"):
+              dest=z.parent/(z.stem+"_extracted")
+              dest.mkdir(parents=True,exist_ok=True)
+              with zipfile.ZipFile(z) as f:
+                  f.extractall(dest)
+          print("ZIP_EXTRACTION_DONE")
+          for p in root.rglob("metrics.json"):
+              print("METRICS_FILE",p)
+          for p in root.rglob("model_seed_metrics.csv"):
+              print("SEED_CSV",p)
+          PY
+          python aggregate_real_results.py
+      - name: Upload consolidated metrics report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: consolidated-real-training-report
+          path: report/
+          if-no-files-found: warn
+          retention-days: 30
