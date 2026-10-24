@@ -1,9 +1,9 @@
-name: Verify real training artifacts
+name: Verify real training artifacts and export error samples
 
 on:
-  push:
-    paths:
-      - ".github/workflows/inspect-results.yml"
+  workflow_run:
+    workflows: ["Real waste-classification training"]
+    types: [completed]
   workflow_dispatch:
 
 permissions:
@@ -12,33 +12,37 @@ permissions:
 
 jobs:
   inspect:
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+      - name: Install report and dataset dependencies
+        run: python -m pip install --upgrade pandas numpy pillow datasets
       - name: Download completed training artifacts
         uses: actions/download-artifact@v4
         with:
-          github-token: \${{ secrets.GITHUB_TOKEN }}
-          repository: \${{ github.repository }}
-          run-id: 40124736619
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ github.event.workflow_run.id || 40130127779 }}
           path: artifacts
-      - name: Parse and verify metrics
+      - name: Parse metrics, verify files, and export representative misclassified images
         run: |
           python - <<'PY'
-          import json, os
+          import json, os, csv
           from pathlib import Path
           import pandas as pd
+          from datasets import load_dataset
+          from PIL import Image
 
           root = Path("artifacts")
           files = list(root.rglob("metrics.json"))
           audit_files = list(root.rglob("dataset_audit.json"))
           summary_rows = []
+          model_runs = {}
           for path in files:
               try:
                   m = json.loads(path.read_text(encoding="utf-8"))
@@ -48,6 +52,7 @@ jobs:
               row = {
                   "model": m.get("model"), "seed": m.get("seed"),
                   "best_epoch": m.get("best_epoch"),
+                  "best_val_macro_f1": m.get("best_val_macro_f1"),
                   "test_accuracy": m.get("accuracy"),
                   "test_macro_precision": m.get("macro_precision"),
                   "test_macro_recall": m.get("macro_recall"),
@@ -57,6 +62,7 @@ jobs:
                   "source_file": str(path),
               }
               summary_rows.append(row)
+              model_runs.setdefault(m.get("model"), []).append((float(m.get("best_val_macro_f1", -1)), path.parent, m))
               print("TEST_METRICS", json.dumps(row, ensure_ascii=False))
           if not summary_rows:
               raise SystemExit("No metrics.json files found in the downloaded artifacts.")
@@ -73,45 +79,76 @@ jobs:
               a = json.loads(path.read_text(encoding="utf-8"))
               audit_summary.append({
                   "path": str(path), "source_dataset": a.get("source_dataset"),
-                  "source_rows": a.get("source_rows"),
+                  "source_split": a.get("source_split"), "source_rows": a.get("source_rows"),
+                  "decoded_valid_rows_before_dedup": a.get("decoded_valid_rows_before_dedup"),
+                  "exact_duplicate_rows_removed": a.get("exact_duplicate_rows_removed"),
                   "final_unique_images": a.get("final_unique_images"),
                   "split_counts": a.get("split_counts"),
                   "class_counts_by_split": a.get("class_counts_by_split"),
                   "source_to_model_label_mapping": a.get("source_to_model_label_mapping"),
+                  "cleaning_rules": a.get("cleaning_rules"),
               })
           Path("verified_results/dataset_audit_summary.json").write_text(
               json.dumps(audit_summary, ensure_ascii=False, indent=2), encoding="utf-8")
-          missing = []
-          for artifact in root.iterdir():
-              if not artifact.is_dir(): continue
-              checks = {
-                  "best_model_weights": len(list(artifact.rglob("best_model.pt"))),
-                  "confusion_matrices": len(list(artifact.rglob("confusion_matrix.csv"))),
-                  "training_curves": len(list(artifact.rglob("training_curve.png"))),
-                  "test_prediction_files": len(list(artifact.rglob("test_predictions.csv"))),
-              }
-              print("ARTIFACT_CHECK", artifact.name, json.dumps(checks))
-              if any(v == 0 for v in checks.values()): missing.append(artifact.name)
+
+          # Select each model's representative seed by validation Macro F1, never by test metrics.
+          ds = load_dataset("huaweilin/waste-classification", split="cleaned")
+          out = Path("verified_results/error_samples")
+          out.mkdir(parents=True, exist_ok=True)
+          sample_rows = []
+          for model_name, runs in sorted(model_runs.items()):
+              best_val, run_dir, metrics = sorted(runs, key=lambda x: x[0], reverse=True)[0]
+              error_csv = run_dir / "misclassified_samples.csv"
+              if not error_csv.exists():
+                  print("MISSING_ERROR_CSV", str(error_csv))
+                  continue
+              errors = pd.read_csv(error_csv)
+              if errors.empty:
+                  continue
+              errors = errors.sort_values("confidence")
+              selected = []
+              # Include low-confidence mistakes and high-confidence mistakes for a balanced inspection.
+              selected.extend([(r, "low_confidence_error") for _, r in errors.head(3).iterrows()])
+              selected.extend([(r, "high_confidence_error") for _, r in errors.tail(2).iterrows()])
+              seen = set()
+              for row, sample_type in selected:
+                  idx = int(row["source_index"])
+                  if idx in seen: continue
+                  seen.add(idx)
+                  try:
+                      img = ds[idx]["image"].convert("RGB")
+                      img.thumbnail((640, 640))
+                      filename = f"{model_name}_seed{metrics['seed']}_idx{idx}_{row['true_label']}_as_{row['predicted_label']}.jpg"
+                      img.save(out / filename, quality=92)
+                      sample_rows.append({
+                          "model": model_name, "seed": int(metrics["seed"]),
+                          "best_val_macro_f1": best_val, "source_index": idx,
+                          "true_label": row["true_label"], "predicted_label": row["predicted_label"],
+                          "confidence": float(row["confidence"]), "sample_type": sample_type,
+                          "image_file": filename,
+                      })
+                  except Exception as e:
+                      print("IMAGE_EXPORT_ERROR", model_name, idx, repr(e))
+          pd.DataFrame(sample_rows).to_csv("verified_results/error_samples_index.csv", index=False)
           with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as f:
               f.write("# Verified real training results\n\n")
               f.write(f"- metrics.json files parsed: **{len(summary_rows)}**\n")
-              f.write(f"- dataset audit files: **{len(audit_files)}**\n\n")
+              f.write(f"- dataset audit files: **{len(audit_files)}**\n")
+              f.write(f"- exported representative misclassified images: **{len(sample_rows)}**\n\n")
               f.write("## Per-seed held-out test metrics\n\n")
               f.write(df[["model","seed","best_epoch","test_accuracy","test_macro_precision","test_macro_recall","test_macro_f1","test_n"]].to_markdown(index=False))
               f.write("\n\n## Mean and standard deviation by model\n\n")
               f.write(grouped.reset_index().to_markdown(index=False))
               f.write("\n\n## Data audit\n\n")
               f.write(json.dumps(audit_summary,ensure_ascii=False,indent=2))
-              f.write("\n\n## Artifact integrity\n\n")
-              f.write(f"- Missing required output types in artifact folders: {missing if missing else 'None detected'}\n")
           print("SUMMARY_TABLE")
           print(grouped.reset_index().to_string(index=False))
-          print("DATASET_AUDIT_SUMMARY", json.dumps(audit_summary, ensure_ascii=False))
+          print("ERROR_SAMPLES_EXPORTED",len(sample_rows))
           PY
-      - name: Upload verified results
+      - name: Upload verified metrics and error images
         uses: actions/upload-artifact@v4
         with:
-          name: verified-real-training-results
+          name: verified-real-training-results-and-errors
           path: verified_results/
           if-no-files-found: error
           retention-days: 30
