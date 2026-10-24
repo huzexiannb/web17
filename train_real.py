@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-"""Reproducible real-image training for the four-class household-waste task."""
+"""Reproducible real-image training for the four-class household-waste task.
+This file is part of the public GitHub Actions training workflow.
+"""
 import argparse, copy, hashlib, json, os, random, shutil, time, warnings
 from collections import Counter, defaultdict
 from pathlib import Path
