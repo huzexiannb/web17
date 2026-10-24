@@ -54,6 +54,54 @@ if records:
 if audits:
     (out/"dataset_audit.json").write_text(json.dumps(audits[0],ensure_ascii=False,indent=2),encoding="utf-8")
 
+# Export and print the actual confusion matrices, training histories, and error samples.
+confusion_summary = []
+error_summary = []
+history_summary = []
+for f in root.rglob("confusion_matrix.csv"):
+    try:
+        df = pd.read_csv(f, index_col=0)
+        confusion_summary.append((str(f), df))
+    except Exception as e:
+        print("CONFUSION_READ_ERROR", str(f), repr(e))
+for f in root.rglob("misclassified_samples.csv"):
+    try:
+        df = pd.read_csv(f)
+        error_summary.append((str(f), df))
+    except Exception as e:
+        print("ERROR_SAMPLES_READ_ERROR", str(f), repr(e))
+for f in root.rglob("training_history.csv"):
+    try:
+        df = pd.read_csv(f)
+        history_summary.append((str(f), df))
+    except Exception as e:
+        print("HISTORY_READ_ERROR", str(f), repr(e))
+with (out/"confusion_matrices.txt").open("w",encoding="utf-8") as fp:
+    for name, df in confusion_summary:
+        fp.write("\\n### "+name+"\\n"+df.to_string()+"\\n")
+with (out/"misclassification_summary.txt").open("w",encoding="utf-8") as fp:
+    for name, df in error_summary:
+        fp.write("\\n### "+name+" | errors="+str(len(df))+"\\n")
+        fp.write(df.head(12).to_string(index=False)+"\\n")
+with (out/"training_history_summary.txt").open("w",encoding="utf-8") as fp:
+    for name, df in history_summary:
+        fp.write("\\n### "+name+"\\n"+df.to_string(index=False)+"\\n")
+if audits:
+    a=audits[0]
+    print("=== DATASET AUDIT SUMMARY ===")
+    print("source_rows:",a.get("source_rows"),"valid_before_dedup:",a.get("decoded_valid_rows_before_dedup"),
+          "duplicates_removed:",a.get("exact_duplicate_rows_removed"),"final_unique_images:",a.get("final_unique_images"))
+    print("split_counts:",json.dumps(a.get("split_counts",{}),ensure_ascii=False))
+    print("class_counts_by_split:",json.dumps(a.get("class_counts_by_split",{}),ensure_ascii=False))
+print("confusion_matrix_files:",len(confusion_summary))
+print("misclassification_files:",len(error_summary))
+for name,df in confusion_summary:
+    print("=== CONFUSION MATRIX:",name,"===")
+    print(df.to_string())
+for name,df in error_summary:
+    print("=== ERROR SUMMARY:",name,"count=",len(df),"===")
+    print(df.head(5).to_string(index=False))
+
 print("=== VALIDATION SUMMARY ===")
 print("metrics_json_count:",len(records))
 print("seed_csv_count:",len(seed_tables))
