@@ -196,3 +196,14 @@ if error_pattern_rows:
                     .sort_values(["model", "error_count"], ascending=[True, False]))
     top_patterns.to_csv(out / "top_misclassification_pairs.csv", index=False)
     print("ERROR_PATTERN_ROWS=" + str(len(patterns)))
+
+if "top_patterns" in globals() and not top_patterns.empty:
+    lines = ["# Misclassification patterns from held-out test predictions", "",
+             "Counts aggregate errors across the three random seeds. This table identifies label-confusion patterns; it does not by itself establish the visual cause of an error.", "",
+             "| Model | True class | Predicted class | Error count | Mean confidence |",
+             "|---|---|---|---:|---:|"]
+    for _, row in top_patterns.iterrows():
+        lines.append(f"| {row['model']} | {row['true_label']} | {row['predicted_label']} | {int(row['error_count'])} | {float(row['mean_confidence']):.3f} |")
+    (out / "error_pattern_summary.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    print("=== TOP MISCLASSIFICATION PAIRS ===")
+    print(top_patterns.head(40).to_string(index=False))
