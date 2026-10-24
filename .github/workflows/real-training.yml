@@ -12,12 +12,12 @@ permissions:
   contents: read
 
 concurrency:
-  group: real-waste-training-\${{ github.ref }}-\${{ matrix.model }}
+  group: real-waste-training-${{ github.ref }}-${{ matrix.model }}
   cancel-in-progress: false
 
 jobs:
   train:
-    name: Train \${{ matrix.model }}
+    name: Train ${{ matrix.model }}
     runs-on: ubuntu-latest
     timeout-minutes: 350
     strategy:
@@ -61,7 +61,7 @@ jobs:
       - name: Train on real image dataset with three seeds
         run: |
           python train_real.py \
-            --model "\${{ matrix.model }}" \
+            --model "${{ matrix.model }}" \
             --seeds 42 43 44 \
             --epochs 8 \
             --patience 3 \
@@ -74,7 +74,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: real-training-\${{ matrix.model }}
+          name: real-training-${{ matrix.model }}
           path: |
             outputs/
             real_dataset_cache/
