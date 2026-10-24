@@ -115,3 +115,55 @@ if all_seed.empty:
     print("WARNING: no model_seed_metrics.csv; mean/std report unavailable.")
 
 # Trigger artifact aggregation after fixing GitHub Actions expression interpolation.
+
+
+# Generate a compact, auditable comparison table from the per-seed test results.
+if not all_seed.empty:
+    required_models = {"resnet18", "mobilenet_v3_small", "efficientnet_v2_s", "efficientnet_v2_s_sk"}
+    if "model" not in all_seed.columns or "seed" not in all_seed.columns:
+        raise SystemExit("Missing model/seed columns; cannot validate repeated experiments.")
+    observed_models = set(all_seed["model"].astype(str))
+    if observed_models != required_models:
+        raise SystemExit(f"Expected all four models; found {sorted(observed_models)}")
+    counts = all_seed.groupby("model")["seed"].nunique().to_dict()
+    if any(counts.get(m, 0) != 3 for m in required_models):
+        raise SystemExit(f"Expected three distinct seeds per model; found {counts}")
+    metric_names = [
+        ("test_accuracy", "Accuracy"),
+        ("test_macro_precision", "Macro Precision"),
+        ("test_macro_recall", "Macro Recall"),
+        ("test_macro_f1", "Macro F1"),
+    ]
+    missing = [col for col, _ in metric_names if col not in all_seed.columns]
+    if missing:
+        raise SystemExit(f"Missing required test metrics: {missing}")
+    rows = ["# Real-data model comparison", "",
+            "Values are mean ± sample standard deviation across seeds 42, 43, and 44. Metrics are held-out test-set scores, not validation scores.", "",
+            "| Model | Accuracy (%) | Macro Precision (%) | Macro Recall (%) | Macro F1 (%) | Mean latency (ms) |",
+            "|---|---:|---:|---:|---:|---:|"]
+    for model in sorted(required_models):
+        subset = all_seed[all_seed["model"].astype(str) == model]
+        vals = []
+        for col, _ in metric_names:
+            mean = subset[col].astype(float).mean() * 100
+            std = subset[col].astype(float).std(ddof=1) * 100
+            vals.append(f"{mean:.2f} ± {std:.2f}")
+        latency = (f"{subset['latency_mean_ms'].astype(float).mean():.2f}"
+                   if "latency_mean_ms" in subset.columns else "not available")
+        rows.append(f"| {model} | {vals[0]} | {vals[1]} | {vals[2]} | {vals[3]} | {latency} |")
+    (out / "model_comparison.md").write_text("\n".join(rows) + "\n", encoding="utf-8")
+    print("REPEATED_EXPERIMENT_COUNTS=" + json.dumps(counts, ensure_ascii=False))
+    print("COMPARISON_REPORT=" + str(out / "model_comparison.md"))
+
+# Do not mark the report as valid unless confusion matrices, training histories,
+# and misclassification lists are available for all 12 model/seed runs.
+expected_runs = 4 * 3
+if records and len(all_seed) != expected_runs:
+    raise SystemExit(f"Expected {expected_runs} model-seed rows, found {len(all_seed)}")
+if records and (len(confusion_summary) < expected_runs or len(history_summary) < expected_runs or len(error_summary) < expected_runs):
+    raise SystemExit(
+        "Incomplete diagnostic artifacts: "
+        f"confusion_matrices={len(confusion_summary)}, "
+        f"training_histories={len(history_summary)}, "
+        f"misclassified_lists={len(error_summary)}; expected at least {expected_runs} each."
+    )
