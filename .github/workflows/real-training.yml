@@ -74,8 +74,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: real-training-${{ matrix.model }}
-          path: |
-            outputs/
-            real_dataset_cache/
+          path: outputs/
           if-no-files-found: warn
           retention-days: 30
