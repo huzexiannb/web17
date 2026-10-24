@@ -65,3 +65,5 @@ if not records:
     raise SystemExit("No metrics.json files were downloaded; do not treat training as validated.")
 if all_seed.empty:
     print("WARNING: no model_seed_metrics.csv; mean/std report unavailable.")
+
+# Trigger artifact aggregation after fixing GitHub Actions expression interpolation.
